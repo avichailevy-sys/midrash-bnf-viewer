@@ -219,7 +219,6 @@
   <div class="brand"><b>MiDRASH</b> · BnF Hébreu · automatic transcription</div>
 
   <div class="grp">
-    <button id="browseBtn">Browse manuscripts</button>
     <label class="drop" id="folderLabel" for="folder">Open transcription folder</label>
     <input id="folder" type="file" webkitdirectory directory multiple>
     <select id="pagesel" aria-label="Page"><option>— no folder loaded —</option></select>
@@ -936,8 +935,6 @@ function loadIndex(files){
     facets = d.facets || {};
     buildFacets();
     runSearch();
-    document.getElementById('browseBtn').textContent =
-      'Browse ' + corpus.length + ' manuscripts';
   }).catch(e=>notice('Could not read the index', e.message));
   return true;
 }
@@ -1131,15 +1128,6 @@ document.getElementById('clearF').onclick = ()=>{
   document.querySelectorAll('.fv.on').forEach(e=>e.classList.remove('on'));
   runSearch();
 };
-document.getElementById('browseBtn').onclick = ()=>{
-  if (!corpus.length){
-    notice('No index loaded',
-      'Open a corpus folder that contains <code>index-meta.json</code>, produced by '
-      + '<code>build_index.py</code>.');
-    return;
-  }
-  document.body.classList.toggle('browsing');
-};
 window.addEventListener('keydown', e=>{
   if (e.key === 'Escape') document.body.classList.remove('browsing');
 });
@@ -1248,8 +1236,6 @@ async function bootFromServer(){
     webMode = true;
     buildFacets();
     runSearch();
-    document.getElementById('browseBtn').textContent =
-      'Browse ' + corpus.length + ' manuscripts';
     topq.placeholder = 'Search ' + corpus.length
       + ' manuscripts \u2014 title, shelfmark, scribe, script, date\u2026';
     document.body.classList.add('browsing');
