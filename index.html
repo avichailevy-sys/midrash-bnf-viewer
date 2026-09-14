@@ -82,7 +82,7 @@
   /* ---------- stage ---------- */
   main{flex:1;display:flex;min-height:0;position:relative}
   #osd{flex:1;min-width:0;background:var(--stage)}
-  #osd.ghost .openseadragon-canvas{opacity:.18;transition:opacity .08s linear}
+  #osd.ghost .openseadragon-canvas{opacity:var(--page-dim,1);transition:opacity .08s linear}
 
   /* facing text column */
   #facing{
@@ -111,22 +111,27 @@
   /* ---------- overlay lines on the image ---------- */
   .oline{
     direction:rtl;text-align:right;font-family:var(--hebrew);
-    color:#15100a;white-space:nowrap;overflow:visible;
-    /* Dark ink on a light halo: legible over parchment, and it reads as
-       writing rather than as a caption floating above the page. */
-    text-shadow:0 0 2px #fff, 0 0 5px #fff, 0 0 9px rgba(255,255,255,.85);
+    color:rgba(26,21,16,var(--ink-a, 1));white-space:nowrap;overflow:visible;
+    /* An opaque band behind each line. Without it the strokes of the script
+       underneath show through the gaps between letters and the two compete;
+       a glow alone is not enough on a densely written page. The band fades
+       with the text, so at the left of the slider the page is untouched. */
+    background:rgba(250,247,240,var(--band, .92));
+    box-shadow:0 0 0 1px rgba(250,247,240,var(--band, .92));
     display:flex;align-items:center;justify-content:flex-end;
     pointer-events:auto;cursor:default;
   }
-  body.inklight .oline{
-    color:#fbf7ee;
-    text-shadow:0 0 2px #000, 0 0 6px #000, 0 0 10px rgba(0,0,0,.8);
-  }
   .oline > span{display:inline-block;transform-origin:100% 50%;white-space:nowrap}
-  body.boxes .oline{outline:1px solid rgba(123,143,212,.55)}
-  .oline.hot{outline:1px solid var(--hl);background:rgba(123,143,212,.14)}
-  .oline.low{color:#7a1a12;text-shadow:0 0 2px #fff,0 0 6px #fff,0 0 10px rgba(255,220,215,.9)}
-  body.inklight .oline.low{color:#ffd9d4;text-shadow:0 0 3px #000,0 0 8px #7a1a12}
+  body.boxes .oline{outline:1px solid rgba(106,122,82,.6)}
+  .oline.hot{outline:1px solid var(--hl);background:rgba(232,236,221,.96)}
+  .oline.low{color:#7a1a12}
+  /* Some manuscripts are photographed dark; a pale band glares against them. */
+  body.inkdark .oline{
+    color:rgba(246,242,232,var(--ink-a, 1));
+    background:rgba(28,25,20,var(--band, .92));
+    box-shadow:0 0 0 1px rgba(28,25,20,var(--band, .92));
+  }
+  body.inkdark .oline.low{color:#ffcdc4}
 
   /* ---------- footer / status ---------- */
   footer{
@@ -150,6 +155,16 @@
   #notice button{margin-top:9px}
 
   .drop{border:1px dashed var(--rule);border-radius:2px;padding:4px 9px;color:var(--muted);font-size:11px;cursor:pointer}
+  /* On the published site the corpus is fetched, not picked, so the folder
+     control and the page menu only appear once they mean something. */
+  body.web .drop, body.web input[type=file]{display:none}
+  body.web #pagesel{display:none}
+  body.web.reading #pagesel{display:inline-block}
+  #msLabel{
+    font-family:var(--sans);font-size:12.5px;color:var(--ink);
+    padding:4px 2px;white-space:nowrap;
+  }
+  #msLabel:empty{display:none}
   .drop:hover{border-color:var(--hl);color:var(--ink)}
   .drop.armed{border-color:var(--ok);color:var(--ok)}
   input[type=file]{display:none}
@@ -220,6 +235,7 @@
 
   <div class="grp">
     <label class="drop" id="folderLabel" for="folder">Open transcription folder</label>
+    <span id="msLabel"></span>
     <input id="folder" type="file" webkitdirectory directory multiple>
     <select id="pagesel" aria-label="Page"><option>— no folder loaded —</option></select>
     <button id="prev" title="Previous page">‹</button>
@@ -247,7 +263,6 @@
 
   <div class="grp">
     <button id="boxes" aria-pressed="false">Boxes</button>
-    <button id="demo">Offline preview</button>
     <button id="onlyMain" aria-pressed="false">Main text only</button>
     <button id="invert" aria-pressed="false">Light ink</button>
   </div>
@@ -304,47 +319,6 @@ let imgW = 0, imgH = 0;
 let srcLabel = "placeholder text";
 let flatFallbackUsed = false;
 let openTimer = null;
-let demoMode = false;
-
-/* ---------------------------------------------------------------------
-   1. PLACEHOLDER LINES
-   Normalised 0–1 boxes so they land sensibly whatever the real pixel
-   dimensions turn out to be. Replace by loading a PAGE XML file.
-   Text: Genesis 1 (public domain).
---------------------------------------------------------------------- */
-const PLACEHOLDER_TEXT = [
-  "בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ",
-  "וְהָאָרֶץ הָיְתָה תֹהוּ וָבֹהוּ וְחֹשֶׁךְ עַל פְּנֵי תְהוֹם",
-  "וְרוּחַ אֱלֹהִים מְרַחֶפֶת עַל פְּנֵי הַמָּיִם",
-  "וַיֹּאמֶר אֱלֹהִים יְהִי אוֹר וַיְהִי אוֹר",
-  "וַיַּרְא אֱלֹהִים אֶת הָאוֹר כִּי טוֹב",
-  "וַיַּבְדֵּל אֱלֹהִים בֵּין הָאוֹר וּבֵין הַחֹשֶׁךְ",
-  "וַיִּקְרָא אֱלֹהִים לָאוֹר יוֹם וְלַחֹשֶׁךְ קָרָא לָיְלָה",
-  "וַיְהִי עֶרֶב וַיְהִי בֹקֶר יוֹם אֶחָד",
-  "וַיֹּאמֶר אֱלֹהִים יְהִי רָקִיעַ בְּתוֹךְ הַמָּיִם",
-  "וִיהִי מַבְדִּיל בֵּין מַיִם לָמָיִם",
-  "וַיַּעַשׂ אֱלֹהִים אֶת הָרָקִיעַ וַיַּבְדֵּל בֵּין הַמַּיִם",
-  "אֲשֶׁר מִתַּחַת לָרָקִיעַ וּבֵין הַמַּיִם אֲשֶׁר מֵעַל",
-  "לָרָקִיעַ וַיְהִי כֵן וַיִּקְרָא אֱלֹהִים לָרָקִיעַ שָׁמָיִם",
-  "וַיְהִי עֶרֶב וַיְהִי בֹקֶר יוֹם שֵׁנִי",
-  "וַיֹּאמֶר אֱלֹהִים יִקָּווּ הַמַּיִם מִתַּחַת הַשָּׁמַיִם"
-];
-
-function placeholderLines(W, H){
-  // A plausible single text block: right margin 0.14, block width 0.70.
-  const top = 0.115, bottom = 0.90, x0 = 0.16, wFrac = 0.68;
-  const n = PLACEHOLDER_TEXT.length;
-  const pitch = (bottom - top) / n;
-  return PLACEHOLDER_TEXT.map((t,i)=>({
-    id: "ph_" + (i+1),
-    x: Math.round(x0 * W),
-    y: Math.round((top + i*pitch) * H),
-    w: Math.round(wFrac * W),
-    h: Math.round(pitch * 0.78 * H),
-    text: t,
-    conf: null
-  }));
-}
 
 /* ---------------------------------------------------------------------
    2. VIEWER
@@ -396,76 +370,12 @@ function onOpen(){
     pendingLines = null; pendingDeclared = null;
     setStatus(lines.length + ' lines \u2014 ' + imageMode, 'ok');
   } else {
-    setStatus(demoMode ? 'offline preview \u2014 synthetic page'
-            : flatFallbackUsed ? 'flat image (no tiles)' : 'tiles loaded', 'ok');
-    if (!lines.length || lines[0].id.startsWith('ph_')){
-      lines = placeholderLines(imgW, imgH);
-      srcLabel = 'placeholder text';
-    }
+    setStatus(flatFallbackUsed ? 'flat image (no tiles)' : 'tiles loaded', 'ok');
+
   }
   render();
 }
 
-/* ---------------------------------------------------------------------
-   OFFLINE PREVIEW
-   Draws a synthetic ruled page on a canvas — no network at all — so the
-   overlay geometry, the blink, and the facing sync can be exercised even
-   where gallica.bnf.fr is unreachable. This is scaffolding, not a facsimile.
---------------------------------------------------------------------- */
-function syntheticPage(W, H){
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d');
-
-  g.fillStyle = '#d9c8a4'; g.fillRect(0,0,W,H);
-  // uneven tone, so the opacity slider has something to reveal
-  for (let i=0;i<220;i++){
-    const r = 40 + Math.random()*260;
-    g.beginPath();
-    g.arc(Math.random()*W, Math.random()*H, r, 0, Math.PI*2);
-    g.fillStyle = `rgba(${150+Math.random()*60|0},${120+Math.random()*50|0},80,0.035)`;
-    g.fill();
-  }
-  // ruling and a written area matching the placeholder block
-  const top=0.115, bottom=0.90, x0=0.16, wF=0.68, n=PLACEHOLDER_TEXT.length;
-  const pitch=(bottom-top)/n;
-  g.strokeStyle='rgba(120,95,60,0.28)'; g.lineWidth=1.5;
-  for(let i=0;i<=n;i++){
-    const y=(top+i*pitch)*H;
-    g.beginPath(); g.moveTo(x0*W, y); g.lineTo((x0+wF)*W, y); g.stroke();
-  }
-  // ink strokes, deliberately offset a few px from the ruling so the
-  // blink test has something honest to reveal
-  g.fillStyle='rgba(45,32,22,0.82)';
-  for(let i=0;i<n;i++){
-    const y=(top+i*pitch)*H + pitch*H*0.22;
-    const h=pitch*H*0.42;
-    let x=(x0+wF)*W;
-    while (x > x0*W + Math.random()*140){
-      const w = 8 + Math.random()*26;
-      g.fillRect(x-w, y + Math.random()*4, w, h*(0.55+Math.random()*0.45));
-      x -= w + 6 + Math.random()*10;
-    }
-  }
-  return c.toDataURL('image/jpeg', 0.82);
-}
-
-function openDemo(){
-  clearTimeout(openTimer);
-  document.getElementById('notice').classList.remove('show');
-  demoMode = true; flatFallbackUsed = true;
-  resetToPlaceholder();
-  if (viewer){ viewer.destroy(); viewer = null; }
-  viewer = OpenSeadragon({
-    id:'osd', showNavigationControl:false, showNavigator:true,
-    navigatorPosition:'BOTTOM_LEFT', navigatorHeight:90, navigatorWidth:70,
-    maxZoomPixelRatio:3, animationTime:0.5, springStiffness:8,
-    tileSources:{ type:'image', url: syntheticPage(1400,1900), buildPyramid:false }
-  });
-  viewer.addHandler('open', onOpen);
-  viewer.addHandler('update-viewport', scaleOverlayText);
-}
-document.getElementById('demo').onclick = openDemo;
 
 
 /* ---------------------------------------------------------------------
@@ -768,7 +678,6 @@ async function openBundlePage(i){
     notice('Could not read that page', err.message); return;
   }
 
-  demoMode = false;
   triedFlat = false;
   gallicaBase = null;
   clearTimeout(openTimer);
@@ -1096,6 +1005,14 @@ function finishOpen(m){
   const lab = document.getElementById('folderLabel');
   lab.classList.add('armed');
   lab.textContent = (m.shelfmark || m.id) + ' \u2014 ' + bundle.length + ' pages';
+  const ms = document.getElementById('msLabel');
+  if (ms){
+    const bits = [m.shelfmark || m.id];
+    if (m.title) bits.push(m.title);
+    if (m.year) bits.push(String(m.year));
+    ms.textContent = bits.join('  \u00b7  ').slice(0, 90);
+  }
+  document.body.classList.add('reading');
   document.body.classList.remove('browsing');
   openBundlePage(0);
 }
@@ -1145,10 +1062,29 @@ let blinking = false, blinkSaved = 65;
 function applyOpacity(){
   const v = +opInput.value;
   document.getElementById('opVal').textContent = v;
-  overlays.forEach(o=>{ o.el.style.opacity = v/100; });
-  document.getElementById('osd').classList.toggle('ghost', v > 88);
-  // Past the ghost threshold the page behind goes dark, so the ink has to invert.
-  document.body.classList.toggle('inklight', v > 88);
+
+  // Text and its background fade together, so the slider moves between the
+  // bare page and a clean reading text rather than between two competing
+  // layers. The band leads slightly: by the time the letters are readable
+  // they already have something to sit on.
+  const t = v / 100;
+  // The band leads the text: by the time the letters are dark enough to read
+  // they already have an opaque ground under them. Fading the element as a
+  // whole would not do \u2014 that multiplies the band's own alpha, so it could
+  // never reach opaque and the writing beneath would always show through.
+  const band = Math.min(1, t * 1.6);
+  overlays.forEach(o=>{
+    o.el.style.opacity = t > 0 ? 1 : 0;
+    o.el.style.setProperty('--ink-a', t.toFixed(3));
+    o.el.style.setProperty('--band', band.toFixed(3));
+  });
+
+  // At the far end the page is dimmed a little so the eye settles on the
+  // text, but not so far that the manuscript disappears \u2014 the point is to
+  // read the transcription against the page, not instead of it.
+  const osd = document.getElementById('osd');
+  osd.style.setProperty('--page-dim', (v > 70 ? (1 - (v - 70) / 100) : 1).toFixed(3));
+  osd.classList.toggle('ghost', v > 70);
 }
 opInput.addEventListener('input', applyOpacity);
 
@@ -1202,7 +1138,7 @@ const invBtn = document.getElementById('invert');
 invBtn.onclick = ()=>{
   const on = invBtn.getAttribute('aria-pressed') !== 'true';
   invBtn.setAttribute('aria-pressed', on);
-  document.body.classList.toggle('inklight', on);
+  document.body.classList.toggle('inkdark', on);
 };
 
 const mainBtn = document.getElementById('onlyMain');
@@ -1234,6 +1170,7 @@ async function bootFromServer(){
     });
     facets = d.facets || {};
     webMode = true;
+    document.body.classList.add('web');
     buildFacets();
     runSearch();
     topq.placeholder = 'Search ' + corpus.length
@@ -1246,7 +1183,11 @@ async function bootFromServer(){
   }
 }
 
-bootFromServer().then(ok=>{ if (!ok) openDemo(); });
+bootFromServer().then(ok=>{
+  if (!ok){
+    setStatus('open a corpus folder to begin');
+  }
+});
 </script>
 </body>
 </html>
