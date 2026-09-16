@@ -695,8 +695,11 @@ document.getElementById('folder').addEventListener('change', async (e)=>{
   e.target.value = '';
 });
 
+let pageToken = 0;
+
 async function openBundlePage(i){
   if (i < 0 || i >= bundle.length) return;
+  const myToken = ++pageToken;
   bundleIdx = i;
   document.getElementById('pagesel').value = i;
   const p = bundle[i];
@@ -714,6 +717,7 @@ async function openBundlePage(i){
   }catch(err){
     notice('Could not read that page', err.message); return;
   }
+  if (myToken !== pageToken) return;   // a newer page was asked for meanwhile
 
   triedFlat = false;
   gallicaBase = null;
@@ -1059,16 +1063,20 @@ async function runTextSearch(){
     const sh = await getShard(w);
     if (token !== searchToken) return;
 
-    if (w in sh){
-      sets.push(new Set(ungap(sh[w])));
-      continue;
-    }
     if (isLast && w.length >= 3){
+      // Always widen the word being typed, even when it happens to be a word
+      // in its own right: the transcriptions are full of short accidental
+      // words, and stopping at an exact match would hide every longer word
+      // the reader is in the middle of typing.
       const union = new Set();
       for (const k in sh){
         if (k.startsWith(w)) for (const p of ungap(sh[k])) union.add(p);
       }
       if (union.size){ sets.push(union); continue; }
+    }
+    if (w in sh){
+      sets.push(new Set(ungap(sh[w])));
+      continue;
     }
     // a word that is neither indexed nor a usable prefix cannot narrow anything
   }
@@ -1160,10 +1168,7 @@ function renderTextHits(hits, total, cap){
     row.append(sh, fo, ln);
     row.onclick = ()=>{
       highlightPhrase = q;
-      if (m.id) openManuscript(m).then(()=>{
-        const i = bundle.findIndex(p=>p.url && p.url.endsWith('/' + h.file));
-        if (i >= 0) openBundlePage(i);
-      });
+      if (m.id) openManuscript(m, h.file);
     };
     list.appendChild(row);
   });
@@ -1234,8 +1239,8 @@ function runSearch(){
   }
 }
 
-async function openManuscript(m){
-  if (webMode) return openManuscriptWeb(m);
+async function openManuscript(m, wantFile){
+  if (webMode) return openManuscriptWeb(m, wantFile);
 
   // local folder: the pages were handed over by the picker
   const inFolder = f => {
@@ -1259,10 +1264,10 @@ async function openManuscript(m){
   bundle = jsons
     .map(f => ({ name: f.name.replace(/\.json$/i,''), jsonFile: f, imgFile: null }))
     .sort((a,b)=>a.name.localeCompare(b.name));
-  finishOpen(m);
+  finishOpen(m, wantFile);
 }
 
-async function openManuscriptWeb(m){
+async function openManuscriptWeb(m, wantFile){
   setStatus('loading ' + (m.shelfmark || m.id) + '\u2026');
   try{
     const r = await fetch(DATA_BASE + m.id + '/pages.json', {cache:'force-cache'});
@@ -1281,10 +1286,10 @@ async function openManuscriptWeb(m){
     setStatus('could not open', 'bad');
     return;
   }
-  finishOpen(m);
+  finishOpen(m, wantFile);
 }
 
-function finishOpen(m){
+function finishOpen(m, wantFile){
   const sel = document.getElementById('pagesel');
   sel.innerHTML = '';
   bundle.forEach((p,i)=>{
@@ -1305,7 +1310,17 @@ function finishOpen(m){
   }
   document.body.classList.add('reading');
   document.body.classList.remove('browsing');
-  openBundlePage(0);
+
+  // Open the wanted page directly. Opening the first page and then jumping
+  // would leave two fetches in flight, and whichever returned last would win \u2014
+  // which is why a search hit sometimes landed on folio 1.
+  let start = 0;
+  if (wantFile){
+    const i = bundle.findIndex(p =>
+      (p.url && p.url.endsWith('/' + wantFile)) || p.name === wantFile.replace(/\.json$/i,''));
+    if (i >= 0) start = i;
+  }
+  openBundlePage(start);
 }
 
 document.getElementById('q').addEventListener('input', ()=>{
