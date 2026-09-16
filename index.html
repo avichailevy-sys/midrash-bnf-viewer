@@ -116,13 +116,13 @@
   /* ---------- overlay lines on the image ---------- */
   .oline{
     direction:rtl;text-align:right;font-family:var(--hebrew);
-    color:rgba(26,21,16,var(--ink-a, 1));white-space:nowrap;overflow:visible;
+    color:rgba(26,21,16,var(--ink-a, 0));white-space:nowrap;overflow:visible;
     /* An opaque band behind each line. Without it the strokes of the script
        underneath show through the gaps between letters and the two compete;
        a glow alone is not enough on a densely written page. The band fades
        with the text, so at the left of the slider the page is untouched. */
-    background:rgba(250,247,240,var(--band, .92));
-    box-shadow:0 0 0 1px rgba(250,247,240,var(--band, .92));
+    background:rgba(250,247,240,var(--band, 0));
+    box-shadow:0 0 0 1px rgba(250,247,240,var(--band, 0));
     display:flex;align-items:center;justify-content:flex-end;
     pointer-events:auto;cursor:default;
   }
@@ -132,9 +132,9 @@
   .oline.low{color:#7a1a12}
   /* Some manuscripts are photographed dark; a pale band glares against them. */
   body.inkdark .oline{
-    color:rgba(246,242,232,var(--ink-a, 1));
-    background:rgba(28,25,20,var(--band, .92));
-    box-shadow:0 0 0 1px rgba(28,25,20,var(--band, .92));
+    color:rgba(246,242,232,var(--ink-a, 0));
+    background:rgba(28,25,20,var(--band, 0));
+    box-shadow:0 0 0 1px rgba(28,25,20,var(--band, 0));
   }
   body.inkdark .oline.low{color:#ffcdc4}
 
@@ -1369,25 +1369,27 @@ function applyOpacity(){
   const v = +opInput.value;
   document.getElementById('opVal').textContent = v;
 
-  // Text and its background fade together, so the slider moves between the
-  // bare page and a clean reading text rather than between two competing
-  // layers. The band leads slightly: by the time the letters are readable
-  // they already have something to sit on.
   const t = v / 100;
-  // The band leads the text: by the time the letters are dark enough to read
-  // they already have an opaque ground under them. Fading the element as a
-  // whole would not do \u2014 that multiplies the band's own alpha, so it could
-  // never reach opaque and the writing beneath would always show through.
+  // The band leads the text slightly, so by the time the letters are dark
+  // enough to read they already have a ground under them. Both are written
+  // straight onto the element rather than through a custom property: a
+  // property that failed to apply fell back to a nearly solid band, which
+  // looked like the slider being ignored.
   const band = Math.min(1, t * 1.6);
+  const dark = document.body.classList.contains('inkdark');
+  const bg  = dark ? '28,25,20'   : '250,247,240';
+  const ink = dark ? '246,242,232' : '26,21,16';
+
   overlays.forEach(o=>{
-    o.el.style.opacity = t > 0 ? 1 : 0;
-    o.el.style.setProperty('--ink-a', t.toFixed(3));
-    o.el.style.setProperty('--band', band.toFixed(3));
+    const el = o.el;
+    el.style.opacity = t > 0 ? 1 : 0;
+    el.style.color = 'rgba(' + ink + ',' + t.toFixed(3) + ')';
+    el.style.backgroundColor = 'rgba(' + bg + ',' + band.toFixed(3) + ')';
+    el.style.boxShadow = '0 0 0 1px rgba(' + bg + ',' + band.toFixed(3) + ')';
   });
 
-  // At the far end the page is dimmed a little so the eye settles on the
-  // text, but not so far that the manuscript disappears \u2014 the point is to
-  // read the transcription against the page, not instead of it.
+  // At the far end the page is dimmed a little so the eye settles on the text,
+  // but not so far that the manuscript disappears.
   const osd = document.getElementById('osd');
   osd.style.setProperty('--page-dim', (v > 70 ? (1 - (v - 70) / 100) : 1).toFixed(3));
   osd.classList.toggle('ghost', v > 70);
@@ -1445,6 +1447,7 @@ invBtn.onclick = ()=>{
   const on = invBtn.getAttribute('aria-pressed') !== 'true';
   invBtn.setAttribute('aria-pressed', on);
   document.body.classList.toggle('inkdark', on);
+  applyOpacity();
 };
 
 const mainBtn = document.getElementById('onlyMain');
