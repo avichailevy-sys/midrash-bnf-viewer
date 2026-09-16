@@ -39,6 +39,11 @@
     font-size:12px;
   }
   .brand b{color:var(--ink);font-weight:bold}
+  /* Only meaningful once a manuscript is open, and then it should be the most
+     obvious control on the bar: without it the reader is stuck in one book. */
+  #backBtn{display:none;font-weight:600}
+  body.reading #backBtn{display:inline-block}
+  body.browsing #backBtn{display:none}
   .brand{font-family:var(--sans);font-size:12px;letter-spacing:.06em;color:var(--muted)}
   .brand b{color:var(--ink);font-weight:600}
   .grp{display:flex;align-items:center;gap:7px}
@@ -194,6 +199,22 @@
   .fv .c{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
   .fv.on .c{color:#dde5cf}
   #results{overflow-y:auto;padding:0 0 30px}
+  .hit{
+    display:grid;grid-template-columns:110px 54px 1fr;gap:14px;align-items:baseline;
+    padding:9px 18px;border-bottom:1px solid var(--rule-soft);cursor:pointer;
+  }
+  .hit:hover{background:var(--hl-soft)}
+  .hit .sh{font-family:var(--mono);font-size:11.5px;color:var(--hl);font-weight:600}
+  .hit .fo{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .hit .ln{
+    direction:rtl;text-align:right;font-family:var(--hebrew);font-size:17px;
+    line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .hit mark{background:#f2e9a8;color:inherit;padding:0 1px;border-radius:2px}
+  mark{background:#f2e9a8;color:inherit;padding:0 1px;border-radius:2px}
+  .oline.found{outline:2px solid #c8a52e}
+  .fline.found{background:#fbf6de}
+  .working{padding:26px 18px;color:var(--muted);font-size:13px}
   .rhead{
     position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--rule);
     padding:12px 18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;z-index:2;
@@ -231,6 +252,7 @@
 <body class="mode-overlay">
 
 <header>
+  <button id="backBtn" title="Back to the list (Esc)">← All manuscripts</button>
   <div class="brand"><b>MiDRASH</b> · BnF Hébreu · automatic transcription</div>
 
   <div class="grp">
@@ -247,7 +269,12 @@
     <button id="mFacing" aria-pressed="false">Facing</button>
   </div>
 
+  <input id="q" type="hidden" value="">
   <div class="searchrow">
+    <div class="seg" role="group" aria-label="What to search">
+      <button id="modeCat" aria-pressed="true">Catalogue</button>
+      <button id="modeTxt" aria-pressed="false">Text</button>
+    </div>
     <input id="topq" type="text" spellcheck="false"
            placeholder="Search 349 manuscripts — title, shelfmark, scribe, script, date…">
     <span id="topcount"></span>
@@ -276,7 +303,6 @@
     <aside id="facets"></aside>
     <div id="results">
       <div class="rhead">
-        <input id="q" type="text" placeholder="title, shelfmark, scribe, date…" spellcheck="false">
         <span id="rcount">—</span>
         <button id="clearF">Clear filters</button>
       </div>
@@ -423,7 +449,12 @@ function renderOverlay(){
     el.dataset.i = i;
 
     const span = document.createElement('span');
-    span.textContent = ln.text;
+    if (highlightPhrase && fold(ln.text).indexOf(highlightPhrase) !== -1){
+      markPhrase(span, ln.text, highlightPhrase);
+      el.classList.add('found');
+    } else {
+      span.textContent = ln.text;
+    }
     el.appendChild(span);
 
     // measure at a reference font size, then derive the fixed x-scale
@@ -471,7 +502,13 @@ function renderFacing(){
     row.className = 'fline' + (ln.conf!==null && ln.conf<0.75 ? ' low':'');
     row.dataset.i = i;
     row.innerHTML = `<div class="n">${i+1}</div><div class="t"></div>`;
-    row.querySelector('.t').textContent = ln.text;
+    const cell = row.querySelector('.t');
+    if (highlightPhrase && fold(ln.text).indexOf(highlightPhrase) !== -1){
+      markPhrase(cell, ln.text, highlightPhrase);
+      row.classList.add('found');
+    } else {
+      cell.textContent = ln.text;
+    }
     row.addEventListener('mouseenter', ()=>{ hot(i,true); panTo(ln); });
     row.addEventListener('mouseleave', ()=>hot(i,false));
     box.appendChild(row);
@@ -888,7 +925,261 @@ function matches(m, terms){
   return terms.every(t=>blob.includes(t));
 }
 
+
+/* ---------------------------------------------------------------------
+   TEXT SEARCH
+   The transcriptions run to about a gigabyte, so they cannot be loaded and
+   there is no server to ask. Instead the index is split into thousands of
+   small files by the first letters of each word. A search fetches only the
+   files its own words need, intersects the page lists, then reads those few
+   pages to find the exact wording and quote the line.
+--------------------------------------------------------------------- */
+function searchBase(){ return DATA_BASE + 'search/'; }
+let searchMode = 'cat';
+let pageTable = null;          // loaded on first text search
+let shardCache = {};
+let searchToken = 0;
+let highlightPhrase = '';   // marked in the page once a hit is opened
+
+function foldMap(s){
+  /* Folding strips vowel points and unifies final letters, so positions in the
+     folded string do not correspond to positions in the original. Fold one
+     character at a time, remembering where each folded character came from, so
+     a match can be shown in the manuscript's own spelling.
+
+     Whitespace has to be handled here rather than by reusing fold(): that
+     trims and collapses the whole string, and applied per character it would
+     drop every space, leaving a phrase unable to match. */
+  let out = '', map = [];
+  for (let i = 0; i < s.length; i++){
+    const t = s[i].normalize('NFKD').replace(NIQQUD, '')
+      .replace(/[\u05DA\u05DD\u05DF\u05E3\u05E5]/g, c=>
+        ({'\u05DA':'\u05DB','\u05DD':'\u05DE','\u05DF':'\u05E0',
+          '\u05E3':'\u05E4','\u05E5':'\u05E6'}[c]))
+      .replace(/[^\u05D0-\u05EA\w\s]/g, ' ');
+    for (const c of t){
+      if (/\s/.test(c)){
+        if (!out.length || /\s$/.test(out)) continue;   // collapse runs, skip leading
+        out += ' '; map.push(i);
+      } else {
+        out += c.toLowerCase(); map.push(i);
+      }
+    }
+  }
+  while (/\s$/.test(out)){ out = out.slice(0, -1); map.pop(); }
+  map.push(s.length);
+  return {folded: out, map};
+}
+
+function markPhrase(el, text, phrase){
+  const {folded, map} = foldMap(text);
+  const at = folded.indexOf(phrase);
+  if (at === -1 || !phrase){ el.textContent = text; return false; }
+  const s = map[at], e = map[Math.min(at + phrase.length, map.length - 1)];
+  el.appendChild(document.createTextNode(text.slice(0, s)));
+  const mk = document.createElement('mark');
+  mk.textContent = text.slice(s, e);
+  el.appendChild(mk);
+  el.appendChild(document.createTextNode(text.slice(e)));
+  return true;
+}
+
+function shardName(w){
+  const p = w.length >= 3 ? w.slice(0,3) : w.slice(0,2);
+  let s = '';
+  for (const c of p) s += c.charCodeAt(0).toString(16).padStart(4,'0');
+  return s;
+}
+
+async function getShard(w){
+  const n = shardName(w);
+  if (n in shardCache) return shardCache[n];
+  try{
+    const r = await fetch(searchBase() + 'words/' + n + '.json', {cache:'force-cache'});
+    shardCache[n] = r.ok ? await r.json() : {};
+  }catch(e){ shardCache[n] = {}; }
+  return shardCache[n];
+}
+
+async function getPageTable(){
+  if (pageTable) return pageTable;
+  const r = await fetch(searchBase() + 'pages.json', {cache:'force-cache'});
+  pageTable = await r.json();
+  return pageTable;
+}
+
+function ungap(gaps){
+  const out = []; let cur = 0;
+  for (const g of gaps){ cur += g; out.push(cur); }
+  return out;
+}
+
+function setSearchMode(m){
+  searchMode = m;
+  document.getElementById('modeCat').setAttribute('aria-pressed', m==='cat');
+  document.getElementById('modeTxt').setAttribute('aria-pressed', m==='txt');
+  document.getElementById('topq').placeholder = m === 'txt'
+    ? 'Search the transcriptions \u2014 a word or a phrase\u2026'
+    : 'Search ' + corpus.length + ' manuscripts \u2014 title, shelfmark, scribe, script, date\u2026';
+  document.querySelectorAll('#facets').forEach(e=>e.style.display = m==='txt' ? 'none':'');
+  runSearch();
+}
+document.getElementById('backBtn').onclick = ()=>{
+  document.body.classList.add('browsing');
+};
+
+document.getElementById('modeCat').onclick = ()=>setSearchMode('cat');
+document.getElementById('modeTxt').onclick = ()=>setSearchMode('txt');
+
+async function runTextSearch(){
+  const token = ++searchToken;
+  const q = document.getElementById('topq').value.trim();
+  const list = document.getElementById('rlist');
+  const phrase = fold(q);
+  const words = phrase.split(' ').filter(w=>w.length >= 2);
+
+  if (!words.length){
+    list.innerHTML = '<div class="empty">Type a word or a phrase to search the transcriptions.</div>';
+    document.getElementById('rcount').textContent = '\u2014';
+    return;
+  }
+
+  list.innerHTML = '<div class="working">searching\u2026</div>';
+
+  // The rarest word narrows the search fastest, so start from the shortest
+  // page list and intersect the others into it.
+  // The index holds whole words, so a half-typed one would find nothing. Treat
+  // the last word as a prefix: since shards are keyed by a word's first three
+  // letters, every word starting with that prefix is already in the one file
+  // we would fetch anyway, so this costs nothing extra.
+  let sets = [];
+  for (let wi = 0; wi < words.length; wi++){
+    const w = words[wi];
+    const isLast = wi === words.length - 1 && !/\s$/.test(phrase);
+    const sh = await getShard(w);
+    if (token !== searchToken) return;
+
+    if (w in sh){
+      sets.push(new Set(ungap(sh[w])));
+      continue;
+    }
+    if (isLast && w.length >= 3){
+      const union = new Set();
+      for (const k in sh){
+        if (k.startsWith(w)) for (const p of ungap(sh[k])) union.add(p);
+      }
+      if (union.size){ sets.push(union); continue; }
+    }
+    // a word that is neither indexed nor a usable prefix cannot narrow anything
+  }
+
+  if (!sets.length){
+    list.innerHTML = '<div class="empty">Nothing found. The words may not appear, '
+      + 'or may be too common to index.</div>';
+    document.getElementById('rcount').textContent = '0';
+    return;
+  }
+  sets.sort((a,b)=>a.size-b.size);
+  let cand = sets[0];
+  for (let i=1;i<sets.length;i++){
+    const next = new Set();
+    for (const p of cand) if (sets[i].has(p)) next.add(p);
+    cand = next;
+  }
+
+  const ids = [...cand].sort((a,b)=>a-b);
+  if (!ids.length){
+    list.innerHTML = '<div class="empty">Those words do not appear on the same page.</div>';
+    document.getElementById('rcount').textContent = '0';
+    return;
+  }
+
+  const tbl = await getPageTable();
+  if (token !== searchToken) return;
+
+  // Read the candidate pages and keep only the lines that really contain the
+  // phrase: the index works word by word and cannot tell word order.
+  const CAP = 80;
+  const hits = [];
+  list.innerHTML = '<div class="working">reading ' + Math.min(ids.length, CAP)
+                 + ' of ' + ids.length + ' pages\u2026</div>';
+
+  for (const pid of ids.slice(0, CAP)){
+    if (token !== searchToken) return;
+    const [mi, folio, file] = tbl.pages[pid];
+    const mid = tbl.ms[mi];
+    try{
+      const r = await fetch(DATA_BASE + mid + '/' + file, {cache:'force-cache'});
+      if (!r.ok) continue;
+      const d = await r.json();
+      for (const ln of (d.l || [])){
+        if (fold(ln[6]).indexOf(phrase) !== -1){
+          hits.push({mid, folio, file, text: ln[6]});
+          break;
+        }
+      }
+    }catch(e){ /* skip a page that will not load */ }
+  }
+
+  if (token !== searchToken) return;
+  renderTextHits(hits, ids.length, CAP);
+}
+
+function renderTextHits(hits, total, cap){
+  const list = document.getElementById('rlist');
+  const q = fold(document.getElementById('topq').value.trim());
+  list.innerHTML = '';
+  document.getElementById('rcount').textContent =
+    hits.length + (total > cap ? ' of ' + total + ' pages' : '');
+  const tc = document.getElementById('topcount');
+  if (tc) tc.textContent = document.getElementById('rcount').textContent;
+
+  if (!hits.length){
+    list.innerHTML = '<div class="empty">The words appear on the same page, '
+      + 'but not next to each other.</div>';
+    return;
+  }
+
+  const byId = {};
+  corpus.forEach(m=>{ byId[m.id] = m; });
+
+  hits.forEach(h=>{
+    const m = byId[h.mid] || {};
+    const row = document.createElement('div');
+    row.className = 'hit';
+
+    const sh = document.createElement('div');
+    sh.className = 'sh'; sh.textContent = m.shelfmark || h.mid;
+    const fo = document.createElement('div');
+    fo.className = 'fo'; fo.textContent = h.folio ? 'f. ' + h.folio : '';
+
+    const ln = document.createElement('div');
+    ln.className = 'ln';
+    markPhrase(ln, h.text, q);
+
+    row.append(sh, fo, ln);
+    row.onclick = ()=>{
+      highlightPhrase = q;
+      if (m.id) openManuscript(m).then(()=>{
+        const i = bundle.findIndex(p=>p.url && p.url.endsWith('/' + h.file));
+        if (i >= 0) openBundlePage(i);
+      });
+    };
+    list.appendChild(row);
+  });
+
+  if (total > cap){
+    const more = document.createElement('div');
+    more.className = 'empty';
+    more.textContent = 'Showing the first ' + cap + ' pages of ' + total
+                     + '. Narrow the phrase to see fewer.';
+    list.appendChild(more);
+  }
+}
+
 function runSearch(){
+  if (searchMode === 'txt'){ runTextSearch(); return; }
+  highlightPhrase = '';
   const q = document.getElementById('q').value.trim();
   const terms = fold(q).split(' ').filter(Boolean);
   const hits = corpus.filter(m=>matches(m, terms));
