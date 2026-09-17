@@ -42,7 +42,7 @@
   /* Only meaningful once a manuscript is open, and then it should be the most
      obvious control on the bar: without it the reader is stuck in one book. */
   #backBtn{display:none;font-weight:600}
-  #copyLink{display:none;order:98}
+  #copyLink{display:none}
   body.reading #copyLink{display:inline-block}
   body.reading #backBtn{display:inline-block}
   body.browsing #backBtn{display:none}
@@ -255,6 +255,7 @@
 
 <header>
   <button id="backBtn" title="Back to the list (Esc)">← All manuscripts</button>
+  <button id="copyLink" title="Copy a link to this view">Copy link</button>
   <div class="brand"><b>MiDRASH</b> · BnF Hébreu · automatic transcription</div>
 
   <div class="grp">
@@ -272,7 +273,6 @@
   </div>
 
   <input id="q" type="hidden" value="">
-  <button id="copyLink" title="Copy a link to this view">Copy link</button>
   <div class="searchrow">
     <div class="seg" role="group" aria-label="What to search">
       <button id="modeCat" aria-pressed="true">Catalogue</button>
