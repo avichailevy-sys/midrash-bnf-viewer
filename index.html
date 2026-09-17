@@ -42,6 +42,8 @@
   /* Only meaningful once a manuscript is open, and then it should be the most
      obvious control on the bar: without it the reader is stuck in one book. */
   #backBtn{display:none;font-weight:600}
+  #copyLink{display:none;order:98}
+  body.reading #copyLink{display:inline-block}
   body.reading #backBtn{display:inline-block}
   body.browsing #backBtn{display:none}
   .brand{font-family:var(--sans);font-size:12px;letter-spacing:.06em;color:var(--muted)}
@@ -270,6 +272,7 @@
   </div>
 
   <input id="q" type="hidden" value="">
+  <button id="copyLink" title="Copy a link to this view">Copy link</button>
   <div class="searchrow">
     <div class="seg" role="group" aria-label="What to search">
       <button id="modeCat" aria-pressed="true">Catalogue</button>
@@ -718,6 +721,7 @@ async function openBundlePage(i){
     notice('Could not read that page', err.message); return;
   }
   if (myToken !== pageToken) return;   // a newer page was asked for meanwhile
+  writeState();
 
   triedFlat = false;
   gallicaBase = null;
@@ -828,6 +832,7 @@ let gallicaBase = null;
 let triedFlat = false;
 
 let pendingLines = null, pendingDeclared = null;
+let currentMs = null;      // the manuscript on screen, for the address bar
 
 /* The published files use short keys and positional line arrays, which takes
    roughly half the bytes off a corpus of this size. Expand on arrival so the
@@ -930,6 +935,96 @@ function matches(m, terms){
 }
 
 
+
+/* ---------------------------------------------------------------------
+   SHAREABLE ADDRESS
+   Everything the reader is looking at \u2014 manuscript, page, search, slider \u2014
+   lives in the address bar, so a link opens the same view for someone else.
+   Without this there is no way to say "look at this line" except in prose.
+--------------------------------------------------------------------- */
+let restoring = true;       // nothing may write the address until boot is done
+const openedWith = location.hash.replace(/^#/, '');   // the link as it arrived
+
+function writeState(){
+  if (restoring) return;
+  const p = new URLSearchParams();
+  const m = currentMs;
+  if (m && m.id) p.set('ms', m.id);
+  if (bundle.length && bundleIdx >= 0){
+    const b = bundle[bundleIdx];
+    if (b && b.folio) p.set('f', b.folio);
+    else p.set('p', String(bundleIdx + 1));
+  }
+  const q = document.getElementById('topq').value.trim();
+  if (q){ p.set('q', q); if (searchMode === 'txt') p.set('in', 'text'); }
+  for (const k in active){
+    if (active[k] && active[k].size) p.set(k, [...active[k]].join('|'));
+  }
+  const v = +opInput.value;
+  if (v !== 65) p.set('op', String(v));
+  if (document.body.classList.contains('mode-facing')) p.set('view', 'facing');
+  if (document.body.classList.contains('inkdark')) p.set('ink', 'light');
+
+  const url = location.pathname + (p.toString() ? '#' + p.toString() : '');
+  history.replaceState(null, '', url);
+}
+
+async function readState(){
+  const raw = openedWith;
+  if (!raw){ restoring = false; return false; }
+  const p = new URLSearchParams(raw);
+  restoring = true;
+
+  if (p.get('op')){
+    opInput.value = p.get('op');
+    applyOpacity();
+  }
+  if (p.get('ink') === 'light'){
+    document.body.classList.add('inkdark');
+    const b = document.getElementById('invert');
+    if (b) b.setAttribute('aria-pressed', 'true');
+  }
+  if (p.get('view') === 'facing'){
+    document.body.classList.remove('mode-overlay');
+    document.body.classList.add('mode-facing');
+    document.getElementById('mOverlay').setAttribute('aria-pressed', false);
+    document.getElementById('mFacing').setAttribute('aria-pressed', true);
+  }
+
+  for (const k of ['script','language','genre','subject']){
+    const v = p.get(k);
+    if (v) active[k] = new Set(v.split('|'));
+  }
+  const q = p.get('q');
+  if (q){
+    document.getElementById('topq').value = q;
+    document.getElementById('q').value = q;
+  }
+  if (p.get('in') === 'text') setSearchMode('txt'); else runSearch();
+
+  const msId = p.get('ms');
+  if (msId){
+    const m = corpus.find(x => x.id === msId);
+    if (m){
+      restoring = false;
+      const folio = p.get('f'), pageNo = p.get('p');
+      await openManuscript(m, null);
+      if (folio){
+        const i = bundle.findIndex(b => b.folio === folio);
+        if (i >= 0) openBundlePage(i);
+      } else if (pageNo){
+        const i = parseInt(pageNo, 10) - 1;
+        if (i >= 0 && i < bundle.length) openBundlePage(i);
+      }
+      restoring = false;
+      writeState();
+      return true;
+    }
+  }
+  restoring = false;
+  return false;
+}
+
 /* ---------------------------------------------------------------------
    TEXT SEARCH
    The transcriptions run to about a gigabyte, so they cannot be loaded and
@@ -1028,6 +1123,20 @@ function setSearchMode(m){
   document.querySelectorAll('#facets').forEach(e=>e.style.display = m==='txt' ? 'none':'');
   runSearch();
 }
+document.getElementById('copyLink').onclick = async ()=>{
+  writeState();
+  const btn = document.getElementById('copyLink');
+  const was = btn.textContent;
+  try{
+    await navigator.clipboard.writeText(location.href);
+    btn.textContent = 'Link copied';
+  }catch(e){
+    btn.textContent = 'Press Ctrl+C';
+    // some browsers refuse the clipboard without a gesture they trust
+  }
+  setTimeout(()=>{ btn.textContent = was; }, 1800);
+};
+
 document.getElementById('backBtn').onclick = ()=>{
   document.body.classList.add('browsing');
 };
@@ -1183,6 +1292,7 @@ function renderTextHits(hits, total, cap){
 }
 
 function runSearch(){
+  writeState();
   if (searchMode === 'txt'){ runTextSearch(); return; }
   highlightPhrase = '';
   const q = document.getElementById('q').value.trim();
@@ -1290,6 +1400,7 @@ async function openManuscriptWeb(m, wantFile){
 }
 
 function finishOpen(m, wantFile){
+  currentMs = m;
   const sel = document.getElementById('pagesel');
   sel.innerHTML = '';
   bundle.forEach((p,i)=>{
@@ -1394,7 +1505,7 @@ function applyOpacity(){
   osd.style.setProperty('--page-dim', (v > 70 ? (1 - (v - 70) / 100) : 1).toFixed(3));
   osd.classList.toggle('ghost', v > 70);
 }
-opInput.addEventListener('input', applyOpacity);
+opInput.addEventListener('input', ()=>{ applyOpacity(); writeState(); });
 
 window.addEventListener('keydown', (e)=>{
   if (e.code === 'Space' && !blinking && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)){
@@ -1420,6 +1531,7 @@ function setMode(m){
   document.body.classList.toggle('mode-facing',  m==='facing');
   document.getElementById('mOverlay').setAttribute('aria-pressed', m==='overlay');
   document.getElementById('mFacing').setAttribute('aria-pressed',  m==='facing');
+  writeState();
   if (viewer) setTimeout(()=>{ viewer.viewport.applyConstraints(); scaleOverlayText(); }, 200);
 }
 document.getElementById('mOverlay').onclick = ()=>setMode('overlay');
@@ -1448,6 +1560,7 @@ invBtn.onclick = ()=>{
   invBtn.setAttribute('aria-pressed', on);
   document.body.classList.toggle('inkdark', on);
   applyOpacity();
+  writeState();
 };
 
 const mainBtn = document.getElementById('onlyMain');
@@ -1484,8 +1597,11 @@ async function bootFromServer(){
     runSearch();
     topq.placeholder = 'Search ' + corpus.length
       + ' manuscripts \u2014 title, shelfmark, scribe, script, date\u2026';
-    document.body.classList.add('browsing');
     setStatus(corpus.length + ' manuscripts', 'ok');
+    // A link may name a manuscript and page; open that rather than the list.
+    const restored = await readState();
+    restoring = false;
+    if (!restored) document.body.classList.add('browsing');
     return true;
   }catch(err){
     return false;
